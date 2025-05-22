@@ -10,7 +10,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                             QDialog, QFormLayout)
 from PyQt5.QtGui import QPixmap, QImage, QIcon, QPainter, QColor, QPen, QBrush
 from PyQt5.QtCore import Qt, QSize, QTimer, QByteArray, QBuffer, QIODevice
-
+from PyQt5.QtGui import qRgba
+# hoặc
+from PyQt5.QtGui import *
 
 class ASFHeader:
     """Structure for ASF file header"""
