@@ -862,7 +862,6 @@ class EnhancedPyAsfTool(QMainWindow):
             self.filename_input.setText(os.path.basename(file_path))
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to open SPR file: {str(e)}")
-    
     def open_tga(self):
         """Open TGA file (support both standard TGA and raw BGRA)"""
         file_path, _ = QFileDialog.getOpenFileName(self, "Open TGA", "", "TGA Files (*.tga);;All Files (*)")
@@ -878,73 +877,60 @@ class EnhancedPyAsfTool(QMainWindow):
             if len(data) < 18:
                 raise Exception("File too small - not a valid TGA file")
 
-            # ??c TGA header ??y ??
+            # Äá»c TGA header
             header = data[:18]
             id_length = header[0]
             color_map_type = header[1]
             image_type = header[2]
-            color_map_start = int.from_bytes(header[3:5], 'little')
-            color_map_length = int.from_bytes(header[5:7], 'little')
-            color_map_depth = header[7]
-            x_origin = int.from_bytes(header[8:10], 'little')
-            y_origin = int.from_bytes(header[10:12], 'little')
             width = int.from_bytes(header[12:14], 'little')
             height = int.from_bytes(header[14:16], 'little')
             bits_per_pixel = header[16]
             image_descriptor = header[17]
             
-            print(f"TGA Header Info:")
-            print(f"  Size: {width}x{height}")
-            print(f"  Bits per pixel: {bits_per_pixel}")
-            print(f"  Image type: {image_type}")
-            print(f"  ID length: {id_length}")
-            print(f"  Color map type: {color_map_type}")
-            print(f"  Image descriptor: {image_descriptor:08b}")
-
-            if width <= 0 or height <= 0:
-                raise Exception(f"Invalid dimensions: {width}x{height}")
+            print(f"TGA Info: {width}x{height}, {bits_per_pixel}bpp, type={image_type}")
 
             image = None
             
-            # Th? dùng Qt loader tr??c
+            # Thá»­ Qt loader trÆ°á»›c
             qt_image = QImage()
             if qt_image.loadFromData(data, 'TGA') and not qt_image.isNull():
-                print("? Loaded with Qt TGA loader")
+                print("âœ“ Loaded with Qt TGA loader")
                 image = qt_image
-                # Chuy?n v? RGB888 n?u c?n
                 if image.format() != QImage.Format_RGB888:
-                    print(f"Converting from format {image.format()} to RGB888")
                     image = image.convertToFormat(QImage.Format_RGB888)
             else:
-                print("? Qt loader failed, trying manual decode...")
-                # Th? các ph??ng pháp decode khác nhau
+                print("Qt loader failed, trying manual decode...")
+                # TÃ­nh offset Ä‘á»ƒ bá» qua header vÃ  ID field
+                offset = 18 + id_length
                 
-                # Ph??ng pháp 1: Raw BGRA (nh? code g?c c?a b?n)
-                if bits_per_pixel == 32 and image_type == 2:
-                    print("Trying raw BGRA decode...")
-                    image = self.decode_raw_bgra(data[18:], width, height)
+                # Bá» qua color map náº¿u cÃ³
+                if color_map_type == 1:
+                    color_map_length = int.from_bytes(header[5:7], 'little')
+                    color_map_entry_size = header[7]
+                    color_map_size = color_map_length * (color_map_entry_size // 8)
+                    offset += color_map_size
                 
-                # Ph??ng pháp 2: Manual decode ??y ??
-                if not image or image.isNull():
-                    print("Trying full manual decode...")
-                    image = self.decode_tga_manual(data, width, height, bits_per_pixel, image_type, image_descriptor)
+                image_data = data[offset:]
+                print(f"Image data size: {len(image_data)} bytes")
                 
-                # Ph??ng pháp 3: S? d?ng PIL/Pillow
-                if not image or image.isNull():
-                    print("Trying PIL decode...")
-                    image = self.decode_with_pil(file_path)
+                # Decode dá»±a trÃªn loáº¡i TGA
+                if image_type == 2:  # Uncompressed RGB
+                    image = self.decode_tga(image_data, width, height, bits_per_pixel, image_descriptor)
+                elif image_type == 10:  # RLE compressed
+                    image = self.decode_rle_tga(image_data, width, height, bits_per_pixel, image_descriptor)
+                else:
+                    # Thá»­ decode nhÆ° raw BGRA (fallback cho cÃ¡c file Ä‘áº·c biá»‡t)
+                    image = self.decode_tga(image_data, width, height, bits_per_pixel, image_descriptor)
 
             if image and not image.isNull():
-                print(f"? Successfully decoded image: {image.width()}x{image.height()}")
+                print(f"âœ“ Successfully decoded: {image.width()}x{image.height()}")
                 
-                # Chuy?n ??i sang PNG data ?? l?u tr?
                 ba = QByteArray()
                 buffer = QBuffer(ba)
                 buffer.open(QIODevice.WriteOnly)
                 
-                # ??m b?o image ? ??nh d?ng RGB tr??c khi save
+                # Äáº£m báº£o format RGB888 trÆ°á»›c khi save
                 if image.format() != QImage.Format_RGB888:
-                    print(f"Converting from format {image.format()} to RGB888 for saving")
                     image = image.convertToFormat(QImage.Format_RGB888)
                     
                 if image.save(buffer, 'PNG'):
@@ -955,12 +941,12 @@ class EnhancedPyAsfTool(QMainWindow):
                     self.current_frame = len(self.frames) - 1
                     self.frame_list.setCurrentRow(self.current_frame)
                     self.display_frame(self.current_frame)
-                    self.status_bar.showMessage(f"Opened TGA file: {file_path} ({width}x{height})")
-                    print("? Successfully loaded TGA file")
+                    self.status_bar.showMessage(f"Opened TGA file: {file_path}")
+                    print("âœ“ TGA file loaded successfully")
                 else:
-                    raise Exception("Failed to convert image to PNG")
+                    raise Exception("Failed to save as PNG")
             else:
-                raise Exception("All decode methods failed - unsupported TGA format")
+                raise Exception("Failed to decode TGA image")
                     
         except Exception as e:
             print(f"TGA Error: {str(e)}")
@@ -968,79 +954,49 @@ class EnhancedPyAsfTool(QMainWindow):
             traceback.print_exc()
             QMessageBox.critical(self, "Error", f"Failed to open TGA file: {str(e)}")
 
-    def decode_tga_manual(self, data, width, height, bits_per_pixel, image_type, image_descriptor):
-        """Manual TGA decoding for problematic files"""
-        try:
-            # B? qua header (18 bytes) và ID field n?u có
-            id_length = data[0]
-            offset = 18 + id_length
-            
-            # B? qua color map n?u có
-            color_map_type = data[1]
-            if color_map_type == 1:
-                color_map_length = int.from_bytes(data[5:7], 'little')
-                color_map_entry_size = data[7]
-                color_map_size = color_map_length * (color_map_entry_size // 8)
-                offset += color_map_size
-            
-            image_data = data[offset:]
-            
-            # X? lý các lo?i TGA khác nhau
-            if image_type == 2:  # Uncompressed RGB
-                return self.decode_uncompressed_tga(image_data, width, height, bits_per_pixel, image_descriptor)
-            elif image_type == 10:  # RLE compressed RGB
-                return self.decode_rle_tga(image_data, width, height, bits_per_pixel, image_descriptor)
-            else:
-                print(f"Unsupported TGA type: {image_type}")
-                return None
-                
-        except Exception as e:
-            print(f"Manual decode error: {e}")
-            return None
-
-    def decode_uncompressed_tga(self, image_data, width, height, bits_per_pixel, image_descriptor):
-        """Decode uncompressed TGA data"""
+    def decode_tga(self, image_data, width, height, bits_per_pixel=32, image_descriptor=0):
+        """Decode TGA image data"""
         try:
             bytes_per_pixel = bits_per_pixel // 8
             expected_size = width * height * bytes_per_pixel
             
-            if len(image_data) < expected_size:
-                print(f"Data size mismatch: expected {expected_size}, got {len(image_data)}")
-                return None
+            print(f"Decode TGA: {width}x{height}, {bits_per_pixel}bpp")
+            print(f"Expected data size: {expected_size}, actual: {len(image_data)}")
             
-            # T?o QImage v?i format phù h?p
-            if bits_per_pixel == 24:
-                # 24-bit BGR
-                qimage = QImage(width, height, QImage.Format_RGB888)
-                
-                for y in range(height):
-                    for x in range(width):
-                        idx = (y * width + x) * 3
-                        if idx + 2 < len(image_data):
-                            b = image_data[idx]
-                            g = image_data[idx + 1]
-                            r = image_data[idx + 2]
-                            
-                            # ??o chi?u Y n?u c?n (TGA th??ng có origin ? d??i trái)
-                            actual_y = height - 1 - y if (image_descriptor & 0x20) == 0 else y
-                            qimage.setPixel(x, actual_y, qRgb(r, g, b))
-                            
-            elif bits_per_pixel == 32:
+            if len(image_data) < expected_size:
+                print(f"Warning: Data size mismatch, using available data")
+            
+            if bits_per_pixel == 32:
                 # 32-bit BGRA
                 qimage = QImage(width, height, QImage.Format_ARGB32)
                 
                 for y in range(height):
                     for x in range(width):
-                        idx = (y * width + x) * 4
-                        if idx + 3 < len(image_data):
-                            b = image_data[idx]
-                            g = image_data[idx + 1]
-                            r = image_data[idx + 2]
-                            a = image_data[idx + 3]
+                        pixel_idx = (y * width + x) * 4
+                        if pixel_idx + 3 < len(image_data):
+                            b = image_data[pixel_idx]
+                            g = image_data[pixel_idx + 1]
+                            r = image_data[pixel_idx + 2]
+                            a = image_data[pixel_idx + 3]
                             
-                            # ??o chi?u Y n?u c?n
+                            # Kiá»ƒm tra origin (TGA cÃ³ thá»ƒ cÃ³ origin á»Ÿ dÆ°á»›i)
                             actual_y = height - 1 - y if (image_descriptor & 0x20) == 0 else y
                             qimage.setPixel(x, actual_y, qRgba(r, g, b, a))
+                            
+            elif bits_per_pixel == 24:
+                # 24-bit BGR
+                qimage = QImage(width, height, QImage.Format_RGB888)
+                
+                for y in range(height):
+                    for x in range(width):
+                        pixel_idx = (y * width + x) * 3
+                        if pixel_idx + 2 < len(image_data):
+                            b = image_data[pixel_idx]
+                            g = image_data[pixel_idx + 1]
+                            r = image_data[pixel_idx + 2]
+                            
+                            actual_y = height - 1 - y if (image_descriptor & 0x20) == 0 else y
+                            qimage.setPixel(x, actual_y, qRgb(r, g, b))
             else:
                 print(f"Unsupported bit depth: {bits_per_pixel}")
                 return None
@@ -1048,17 +1004,19 @@ class EnhancedPyAsfTool(QMainWindow):
             return qimage
             
         except Exception as e:
-            print(f"Uncompressed decode error: {e}")
+            print(f"Decode error: {e}")
             return None
 
     def decode_rle_tga(self, image_data, width, height, bits_per_pixel, image_descriptor):
-        """Decode RLE compressed TGA data"""
+        """Decode RLE compressed TGA"""
         try:
             bytes_per_pixel = bits_per_pixel // 8
             pixels = []
             i = 0
             
-            while i < len(image_data) and len(pixels) < width * height:
+            print(f"Decoding RLE TGA: {width}x{height}, {bits_per_pixel}bpp")
+            
+            while i < len(image_data) and len(pixels) < width * height * bytes_per_pixel:
                 if i >= len(image_data):
                     break
                     
@@ -1071,6 +1029,7 @@ class EnhancedPyAsfTool(QMainWindow):
                         pixel_data = image_data[i:i + bytes_per_pixel]
                         i += bytes_per_pixel
                         
+                        # Repeat pixel
                         for _ in range(count):
                             pixels.extend(pixel_data)
                             if len(pixels) >= width * height * bytes_per_pixel:
@@ -1079,41 +1038,42 @@ class EnhancedPyAsfTool(QMainWindow):
                     count = (packet_header & 0x7F) + 1
                     for _ in range(count):
                         if i + bytes_per_pixel <= len(image_data):
-                            pixel_data = image_data[i:i + bytes_per_pixel]
-                            pixels.extend(pixel_data)
+                            pixels.extend(image_data[i:i + bytes_per_pixel])
                             i += bytes_per_pixel
                         if len(pixels) >= width * height * bytes_per_pixel:
                             break
             
-            # Chuy?n pixels thành QImage
-            if bits_per_pixel == 24:
-                qimage = QImage(width, height, QImage.Format_RGB888)
-                
-                for y in range(height):
-                    for x in range(width):
-                        idx = (y * width + x) * 3
-                        if idx + 2 < len(pixels):
-                            b = pixels[idx]
-                            g = pixels[idx + 1]
-                            r = pixels[idx + 2]
-                            
-                            actual_y = height - 1 - y if (image_descriptor & 0x20) == 0 else y
-                            qimage.setPixel(x, actual_y, qRgb(r, g, b))
-                            
-            elif bits_per_pixel == 32:
+            print(f"RLE decoded {len(pixels)} bytes")
+            
+            # Táº¡o QImage tá»« decoded pixels
+            if bits_per_pixel == 32:
                 qimage = QImage(width, height, QImage.Format_ARGB32)
                 
                 for y in range(height):
                     for x in range(width):
-                        idx = (y * width + x) * 4
-                        if idx + 3 < len(pixels):
-                            b = pixels[idx]
-                            g = pixels[idx + 1]
-                            r = pixels[idx + 2]
-                            a = pixels[idx + 3]
+                        pixel_idx = (y * width + x) * 4
+                        if pixel_idx + 3 < len(pixels):
+                            b = pixels[pixel_idx]
+                            g = pixels[pixel_idx + 1]
+                            r = pixels[pixel_idx + 2]
+                            a = pixels[pixel_idx + 3]
                             
                             actual_y = height - 1 - y if (image_descriptor & 0x20) == 0 else y
                             qimage.setPixel(x, actual_y, qRgba(r, g, b, a))
+                            
+            elif bits_per_pixel == 24:
+                qimage = QImage(width, height, QImage.Format_RGB888)
+                
+                for y in range(height):
+                    for x in range(width):
+                        pixel_idx = (y * width + x) * 3
+                        if pixel_idx + 2 < len(pixels):
+                            b = pixels[pixel_idx]
+                            g = pixels[pixel_idx + 1]
+                            r = pixels[pixel_idx + 2]
+                            
+                            actual_y = height - 1 - y if (image_descriptor & 0x20) == 0 else y
+                            qimage.setPixel(x, actual_y, qRgb(r, g, b))
             else:
                 return None
                 
@@ -1122,69 +1082,7 @@ class EnhancedPyAsfTool(QMainWindow):
         except Exception as e:
             print(f"RLE decode error: {e}")
             return None
-
-    def decode_raw_bgra(self, image_data, width, height):
-        """Decode raw BGRA data (original method)"""
-        try:
-            print(f"Raw BGRA decode: expected {width * height * 4} bytes, got {len(image_data)}")
-            
-            if len(image_data) < width * height * 4:
-                print("Not enough data for BGRA")
-                return None
-                
-            # T?o QImage t? raw BGRA data
-            qimage = QImage(image_data, width, height, QImage.Format_ARGB32)
-            
-            if qimage.isNull():
-                print("Failed to create QImage from raw data")
-                return None
-                
-            # TGA th??ng có origin ? d??i, c?n flip
-            qimage = qimage.mirrored(False, True)
-            
-            # Swap R và B channels (BGRA -> RGBA)
-            qimage = qimage.rgbSwapped()
-            
-            return qimage
-            
-        except Exception as e:
-            print(f"Raw BGRA decode error: {e}")
-            return None
-
-    def decode_with_pil(self, file_path):
-        """Decode using PIL/Pillow"""
-        try:
-            from PIL import Image
-            import numpy as np
-            
-            # M? file b?ng PIL
-            pil_image = Image.open(file_path)
-            print(f"PIL loaded: {pil_image.size}, mode: {pil_image.mode}")
-            
-            # Chuy?n v? RGB
-            if pil_image.mode != 'RGB':
-                pil_image = pil_image.convert('RGB')
-            
-            # Chuy?n PIL sang numpy array
-            np_array = np.array(pil_image)
-            
-            # Chuy?n numpy array sang QImage
-            height, width, channel = np_array.shape
-            bytes_per_line = 3 * width
-            qimage = QImage(np_array.data, width, height, bytes_per_line, QImage.Format_RGB888)
-            
-            # Copy data ?? tránh memory issues
-            qimage = qimage.copy()
-            
-            return qimage
-            
-        except ImportError:
-            print("PIL not available")
-            return None
-        except Exception as e:
-            print(f"PIL decode error: {e}")
-            return None
-        
+    
     def load_spr_file(self, file_path):
         """Load SPR file data including TGA images"""
         try:
