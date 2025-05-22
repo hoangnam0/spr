@@ -13,6 +13,7 @@ from PyQt5.QtCore import Qt, QSize, QTimer, QByteArray, QBuffer, QIODevice
 from PyQt5.QtGui import qRgba
 # hoặc
 from PyQt5.QtGui import *
+from PIL import Image
 
 class ASFHeader:
     """Structure for ASF file header"""
@@ -864,97 +865,72 @@ class EnhancedPyAsfTool(QMainWindow):
             self.filename_input.setText(os.path.basename(file_path))
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to open SPR file: {str(e)}")
-    def open_tga(self):
-        """Open TGA file (support both standard TGA and raw BGRA)"""
-        file_path, _ = QFileDialog.getOpenFileName(self, "Open TGA", "", "TGA Files (*.tga);;All Files (*)")
-        if not file_path:
-            return
-
+    def open_tga(self, file_path):
         try:
-            with open(file_path, 'rb') as f:
-                data = f.read()
-
-            print(f"File size: {len(data)} bytes")
+            print(f"Opening TGA file: {file_path}")
             
-            if len(data) < 18:
-                raise Exception("File too small - not a valid TGA file")
-
-            # Đọc TGA header
-            header = data[:18]
-            id_length = header[0]
-            color_map_type = header[1]
-            image_type = header[2]
-            width = int.from_bytes(header[12:14], 'little')
-            height = int.from_bytes(header[14:16], 'little')
-            bits_per_pixel = header[16]
-            image_descriptor = header[17]
+            # Sử dụng PIL để mở TGA
+            pil_image = Image.open(file_path)
+            print(f"PIL Image mode: {pil_image.mode}, size: {pil_image.size}")
             
-            print(f"TGA Info: {width}x{height}, {bits_per_pixel}bpp, type={image_type}")
-
-            image = None
+            # Convert sang RGBA nếu cần
+            if pil_image.mode != 'RGBA':
+                if pil_image.mode == 'RGB':
+                    pil_image = pil_image.convert('RGBA')
+                elif pil_image.mode == 'P':  # Palette mode
+                    pil_image = pil_image.convert('RGBA')
+                elif pil_image.mode == 'L':  # Grayscale
+                    pil_image = pil_image.convert('RGBA')
             
-            # Thử Qt loader trước
-            qt_image = QImage()
-            if qt_image.loadFromData(data, 'TGA') and not qt_image.isNull():
-                print("✓ Loaded with Qt TGA loader")
-                image = qt_image
-                if image.format() != QImage.Format_RGB888:
-                    image = image.convertToFormat(QImage.Format_RGB888)
+            # Convert PIL Image sang QImage
+            width, height = pil_image.size
+            
+            # Lấy dữ liệu pixel
+            if pil_image.mode == 'RGBA':
+                # PIL sử dụng RGBA, Qt sử dụng ARGB
+                data = pil_image.tobytes('raw', 'RGBA')
+                qimage = QImage(data, width, height, QImage.Format_RGBA8888)
             else:
-                print("Qt loader failed, trying manual decode...")
-                # Tính offset để bỏ qua header và ID field
-                offset = 18 + id_length
+                # Fallback: convert sang RGB
+                pil_image = pil_image.convert('RGB')
+                data = pil_image.tobytes('raw', 'RGB')
+                qimage = QImage(data, width, height, QImage.Format_RGB888)
+            
+            # Tạo pixmap từ QImage
+            pixmap = QPixmap.fromImage(qimage)
+            
+            if not pixmap.isNull():
+                # Scale để fit vào label
+                scaled_pixmap = pixmap.scaled(
+                    self.label.size(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation
+                )
                 
-                # Bỏ qua color map nếu có
-                if color_map_type == 1:
-                    color_map_length = int.from_bytes(header[5:7], 'little')
-                    color_map_entry_size = header[7]
-                    color_map_size = color_map_length * (color_map_entry_size // 8)
-                    offset += color_map_size
+                self.label.setPixmap(scaled_pixmap)
+                self.label.setAlignment(Qt.AlignCenter)
                 
-                image_data = data[offset:]
-                print(f"Image data size: {len(image_data)} bytes")
+                print(f"✓ TGA loaded successfully: {width}x{height}")
+                print(f"Pixmap size: {pixmap.size()}")
+                print(f"Scaled size: {scaled_pixmap.size()}")
                 
-                # Decode dựa trên loại TGA
-                if image_type == 2:  # Uncompressed RGB
-                    image = self.decode_tga(image_data, width, height, bits_per_pixel, image_descriptor)
-                elif image_type == 10:  # RLE compressed
-                    image = self.decode_rle_tga(image_data, width, height, bits_per_pixel, image_descriptor)
-                else:
-                    # Thử decode như raw BGRA (fallback cho các file đặc biệt)
-                    image = self.decode_tga(image_data, width, height, bits_per_pixel, image_descriptor)
-
-            if image and not image.isNull():
-                print(f"✓ Successfully decoded: {image.width()}x{image.height()}")
-                
-                ba = QByteArray()
-                buffer = QBuffer(ba)
-                buffer.open(QIODevice.WriteOnly)
-                
-                # Đảm bảo format RGB888 trước khi save
-                if image.format() != QImage.Format_RGB888:
-                    image = image.convertToFormat(QImage.Format_RGB888)
-                    
-                if image.save(buffer, 'PNG'):
-                    frame = ASFFrame()
-                    frame.image_data = ba.data()
-                    self.frames.append(frame)
-                    self.frame_list.addItem(f"Frame {len(self.frames)}")
-                    self.current_frame = len(self.frames) - 1
-                    self.frame_list.setCurrentRow(self.current_frame)
-                    self.display_frame(self.current_frame)
-                    self.status_bar.showMessage(f"Opened TGA file: {file_path}")
-                    print("✓ TGA file loaded successfully")
-                else:
-                    raise Exception("Failed to save as PNG")
+                # Debug: Kiểm tra một vài pixel
+                for y in range(min(5, height)):
+                    for x in range(min(5, width)):
+                        pixel = qimage.pixel(x, y)
+                        r = (pixel >> 16) & 0xFF
+                        g = (pixel >> 8) & 0xFF
+                        b = pixel & 0xFF
+                        a = (pixel >> 24) & 0xFF
+                        print(f"Pixel ({x},{y}): R={r}, G={g}, B={b}, A={a}")
             else:
-                raise Exception("Failed to decode TGA image")
-                    
+                print("✗ Failed to create pixmap")
+                
         except Exception as e:
-            print(f"TGA Error: {str(e)}")
+            print(f"TGA Error: {e}")
             import traceback
             traceback.print_exc()
-            QMessageBox.critical(self, "Error", f"Failed to open TGA file: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Cannot load TGA file: {e}")
 
     def decode_tga(self, image_data, width, height, bits_per_pixel=32, image_descriptor=0):
         """Decode TGA image data"""
